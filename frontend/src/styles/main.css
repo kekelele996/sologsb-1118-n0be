@@ -73,3 +73,9 @@ body {
 .duplicate-row {
   background: #fff9e6 !important;
 }
+.sealed-row {
+  background: #faf5ea !important;
+}
+.sealed-row td {
+  color: #8a8073;
+}

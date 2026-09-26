@@ -1,22 +1,23 @@
 import { onUnmounted, reactive } from 'vue'
 import type { StoreApi } from 'zustand/vanilla'
 import Dexie, { type Table } from 'dexie'
-import type { Artifact, Relation, Stratum, Trench } from '@/types'
+import type { Artifact, Relation, SealManifest, Stratum, Trench } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
   value: number
 }
 
-/** Dexie 封装：探方 / 地层单位 / 出土物 / 层位关系 四张表 + 元数据表 */
+/** Dexie 封装：探方 / 地层单位 / 出土物 / 层位关系 / 封存清单 五张表 + 元数据表 */
 class TrenchLogDb extends Dexie {
   trenches!: Table<Trench, string>
   strata!: Table<Stratum, string>
   artifacts!: Table<Artifact, string>
   relations!: Table<Relation, string>
+  seals!: Table<SealManifest, string>
   meta!: Table<MetaRow, string>
 
   constructor() {
@@ -50,6 +51,15 @@ class TrenchLogDb extends Dexie {
             }
           })
       })
+    // v3：新增交接封存清单表 seals（历史探方默认无封存记录，可照常编目）
+    this.version(SCHEMA_VERSION).stores({
+      trenches: 'id, code, area, backfilled',
+      strata: 'id, trenchId, code, type, topDepth',
+      artifacts: 'id, stratumId, code, category, date',
+      relations: 'id, unitAId, unitBId, type, basis',
+      seals: 'id, trenchId, version, sealedAt',
+      meta: 'key'
+    })
   }
 }
 
@@ -231,4 +241,30 @@ export async function seedDemoData(): Promise<void> {
       note: 'L01 叠压 L02，界面清晰'
     }
   ])
+
+  // T0502 已换班封存（v1 清单）；T0501 未封存，照常编目
+  await db.seals.put({
+    id: 'se_0502_1',
+    trenchId: 'tr_0502',
+    version: 1,
+    sealedAt: new Date().toISOString(),
+    sealedBy: '方铭',
+    note: '换班交接封存，四壁剖面已拍照',
+    unitCount: 1,
+    artifactRecords: 0,
+    artifactCount: 0,
+    relationCount: 0,
+    units: [
+      {
+        stratumId: 'st_0502_l1',
+        code: 'L01',
+        type: '地层',
+        artifactRecords: 0,
+        artifactCount: 0
+      }
+    ],
+    unsealedAt: null,
+    unsealReason: null,
+    unsealedBy: null
+  })
 }

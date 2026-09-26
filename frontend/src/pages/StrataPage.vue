@@ -11,6 +11,7 @@ import { stratumStore } from '@/stores/stratumStore'
 import { trenchStore } from '@/stores/trenchStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { relationStore } from '@/stores/relationStore'
+import { isTrenchSealed } from '@/stores/sealGuard'
 import { uid } from '@/utils/id'
 
 const trenchState = useStore(trenchStore)
@@ -57,9 +58,22 @@ const visible = computed(() =>
   })
 )
 
+/** 表单当前所选探方是否封存中（封存后不可在该探方下新增/修改单位） */
+const formTrenchSealed = computed(() => Boolean(form.trenchId && isTrenchSealed(form.trenchId)))
+
 function trenchLabel(trenchId: string): string {
   const trench = trenchState.trenches.find((item) => item.id === trenchId)
   return trench ? `${trench.area} · ${trench.code}` : '未知探方'
+}
+
+/** 单位所属探方是否封存中（封存后该单位只读） */
+function isSealedRow(row: Stratum): boolean {
+  return isTrenchSealed(row.trenchId)
+}
+
+/** 封存中的行不可勾选、批量改类型时跳过 */
+function selectableOf(row: Stratum): boolean {
+  return !isTrenchSealed(row.trenchId)
 }
 
 function artifactsOf(stratumId: string): number {
@@ -77,6 +91,7 @@ function duplicatedOf(stratum: Stratum): boolean {
 function rowClass(param: { row: Stratum }): string {
   if (invertedOf(param.row)) return 'inverted-row'
   if (duplicatedOf(param.row)) return 'duplicate-row'
+  if (isTrenchSealed(param.row.trenchId)) return 'sealed-row'
   return ''
 }
 
@@ -113,6 +128,10 @@ function openCreate(): void {
 }
 
 function openEdit(stratum: Stratum): void {
+  if (isTrenchSealed(stratum.trenchId)) {
+    ElMessage.warning(`单位「${stratum.code}」所属探方已封存交接，编目只读；如需修改请先在探方清单中解除封存`)
+    return
+  }
   editingId.value = stratum.id
   Object.assign(form, {
     trenchId: stratum.trenchId,
@@ -133,6 +152,10 @@ function openEdit(stratum: Stratum): void {
 async function submit(): Promise<void> {
   if (!form.trenchId) {
     ElMessage.warning('请选择所属探方')
+    return
+  }
+  if (isTrenchSealed(form.trenchId)) {
+    ElMessage.error('所选探方已封存交接，地层单位只读；发现漏登请先在探方清单中填写原因解除封存')
     return
   }
   if (!form.code.trim()) {
@@ -162,7 +185,12 @@ async function submit(): Promise<void> {
     date: form.date,
     drawingNo: form.drawingNo.trim()
   }
-  await stratumStore.getState().save(row)
+  try {
+    await stratumStore.getState().save(row)
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+    return
+  }
   if (isDepthInverted(row)) {
     ElMessage.warning(`已保存，但「${row.code}」上界深度大于下界，层序倒置需复核`)
   } else {
@@ -172,6 +200,10 @@ async function submit(): Promise<void> {
 }
 
 async function remove(stratum: Stratum): Promise<void> {
+  if (isTrenchSealed(stratum.trenchId)) {
+    ElMessage.error(`「${stratum.code}」所属探方已封存交接，无法删除`)
+    return
+  }
   const count = artifactState.artifacts.filter((item) => item.stratumId === stratum.id).length
   const relations = relationState.relations.filter(
     (item) => item.unitAId === stratum.id || item.unitBId === stratum.id
@@ -188,6 +220,13 @@ async function remove(stratum: Stratum): Promise<void> {
 async function applyBatchType(): Promise<void> {
   if (selectedIds.value.length === 0) {
     ElMessage.warning('请先勾选要调整的单位')
+    return
+  }
+  const sealedSelected = stratumState.strata.filter(
+    (item) => selectedIds.value.includes(item.id) && isTrenchSealed(item.trenchId)
+  )
+  if (sealedSelected.length > 0) {
+    ElMessage.error(`含 ${sealedSelected.length} 个已封存探方下的单位（${sealedSelected.map((item) => item.code).join('、')}），封存记录不可调整`)
     return
   }
   await stratumStore.getState().bulkSetType(selectedIds.value, batchType.value)
@@ -237,8 +276,13 @@ async function applyBatchType(): Promise<void> {
     />
 
     <div class="toolbar">
-      <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 190px">
-        <el-option v-for="trench in trenchState.trenches" :key="trench.id" :label="`${trench.area} · ${trench.code}`" :value="trench.id" />
+      <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 210px">
+        <el-option
+          v-for="trench in trenchState.trenches"
+          :key="trench.id"
+          :label="`${trench.area} · ${trench.code}${isTrenchSealed(trench.id) ? '（已封存）' : ''}`"
+          :value="trench.id"
+        />
       </el-select>
       <el-select v-model="filterType" placeholder="全部类型" clearable style="width: 130px">
         <el-option v-for="type in UNIT_TYPES" :key="type" :label="type" :value="type" />
@@ -264,13 +308,14 @@ async function applyBatchType(): Promise<void> {
       :row-class-name="rowClass"
       @selection-change="(rows: Stratum[]) => (selectedIds = rows.map((row) => row.id))"
     >
-      <el-table-column type="selection" width="46" />
+      <el-table-column type="selection" width="46" :selectable="selectableOf" />
       <el-table-column label="序号" width="70">
         <template #default="{ row }: { row: Stratum }">{{ order.indexOf.get(row.id) ?? '—' }}</template>
       </el-table-column>
-      <el-table-column label="探方" width="150">
+      <el-table-column label="探方" width="170">
         <template #default="{ row }: { row: Stratum }">
           <span class="mono">{{ trenchLabel(row.trenchId) }}</span>
+          <el-tag v-if="isSealedRow(row)" type="warning" size="small" effect="plain" class="mini">封存</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="单位号" width="110">
@@ -307,21 +352,40 @@ async function applyBatchType(): Promise<void> {
           <el-tag v-else type="success" size="small" effect="plain">正常</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }: { row: Stratum }">
-          <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
+          <template v-if="isSealedRow(row)">
+            <el-tag type="info" size="small" effect="plain">封存只读</el-tag>
+          </template>
+          <template v-else>
+            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑地层单位' : '新建地层单位'" width="680px">
+      <el-alert
+        v-if="formTrenchSealed"
+        class="alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="该探方已封存交接，地层单位只读"
+        description="发现漏登请先到「探方清单」填写原因解除封存，补录修改后再重新封存。"
+      />
       <el-form label-width="110px">
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="所属探方" required>
               <el-select v-model="form.trenchId" style="width: 100%">
-                <el-option v-for="trench in trenchState.trenches" :key="trench.id" :label="`${trench.area} · ${trench.code}`" :value="trench.id" />
+                <el-option
+                  v-for="trench in trenchState.trenches"
+                  :key="trench.id"
+                  :label="`${trench.area} · ${trench.code}${isTrenchSealed(trench.id) ? '（已封存）' : ''}`"
+                  :value="trench.id"
+                />
               </el-select>
             </el-form-item>
           </el-col>
@@ -389,7 +453,7 @@ async function applyBatchType(): Promise<void> {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submit">保存</el-button>
+        <el-button type="primary" :disabled="formTrenchSealed" @click="submit">保存</el-button>
       </template>
     </el-dialog>
   </div>

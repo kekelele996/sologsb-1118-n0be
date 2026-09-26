@@ -9,6 +9,7 @@ import { useStore } from '@/hooks/usePersistentStore'
 import { artifactStore } from '@/stores/artifactStore'
 import { stratumStore } from '@/stores/stratumStore'
 import { trenchStore } from '@/stores/trenchStore'
+import { isTrenchSealed } from '@/stores/sealGuard'
 import { downloadCsv } from '@/utils/export'
 import { uid } from '@/utils/id'
 
@@ -36,6 +37,19 @@ const form = reactive({
 })
 
 const lockedStratum = computed(() => stratumState.strata.find((item) => item.id === pickStratumId.value) ?? null)
+
+/** 当前登记探方是否封存中（封存后出土物登记只读） */
+const pickTrenchSealed = computed(() => Boolean(pickTrenchId.value && isTrenchSealed(pickTrenchId.value)))
+
+/** 一条出土物所属探方是否封存中 */
+function isArtifactSealed(artifact: Artifact): boolean {
+  const stratum = stratumState.strata.find((item) => item.id === artifact.stratumId)
+  return Boolean(stratum && isTrenchSealed(stratum.trenchId))
+}
+
+function artifactRowClass(param: { row: Artifact }): string {
+  return isArtifactSealed(param.row) ? 'sealed-row' : ''
+}
 
 watch(
   () => [trenchState.trenches.length, pickTrenchId.value] as const,
@@ -104,6 +118,10 @@ function resetForm(): void {
 }
 
 function openEdit(artifact: Artifact): void {
+  if (isArtifactSealed(artifact)) {
+    ElMessage.warning('该出土物所属探方已封存交接，记录只读；如需补录请先在探方清单中解除封存')
+    return
+  }
   editingId.value = artifact.id
   const stratum = stratumState.strata.find((item) => item.id === artifact.stratumId)
   if (stratum) {
@@ -127,6 +145,10 @@ function openEdit(artifact: Artifact): void {
 async function submit(): Promise<void> {
   if (!lockedStratum.value) {
     ElMessage.warning('请先选择所属地层单位')
+    return
+  }
+  if (isTrenchSealed(lockedStratum.value.trenchId)) {
+    ElMessage.error('当前探方已封存交接，出土物只读；发现漏登请先在探方清单中填写原因解除封存')
     return
   }
   if (!form.code.trim()) {
@@ -160,12 +182,21 @@ async function submit(): Promise<void> {
     collector: form.collector.trim(),
     tempLocation: form.tempLocation.trim()
   }
-  await artifactStore.getState().save(row)
+  try {
+    await artifactStore.getState().save(row)
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+    return
+  }
   ElMessage.success(`出土物 ${row.code} 已登记到 ${lockedStratum.value.code}`)
   resetForm()
 }
 
 async function remove(artifact: Artifact): Promise<void> {
+  if (isArtifactSealed(artifact)) {
+    ElMessage.error('该出土物所属探方已封存交接，无法删除')
+    return
+  }
   await ElMessageBox.confirm(`确认删除出土物「${artifact.code}」？`, '删除确认', { type: 'warning' })
   await artifactStore.getState().remove(artifact.id)
   ElMessage.success('出土物已删除')
@@ -220,12 +251,25 @@ function exportList(): void {
     </div>
 
     <el-card shadow="never" class="form-card">
-      <template #header>登记出土物（层位上下文锁定）</template>
+      <template #header>
+        登记出土物（层位上下文锁定）
+        <el-tag v-if="pickTrenchSealed" type="warning" size="small" effect="dark" class="head-seal">封存只读</el-tag>
+      </template>
+      <el-alert
+        v-if="pickTrenchSealed"
+        class="seal-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="当前探方已封存交接，出土物登记只读"
+        description="发现漏登请先到「探方清单」填写原因解除封存，补录后重新封存。"
+      />
       <UnitPicker
         v-model="pickStratumId"
         v-model:trench-id="pickTrenchId"
         :trenches="trenchState.trenches"
         :strata="stratumState.strata"
+        :disabled="pickTrenchSealed"
       />
       <div v-if="lockedStratum" class="locked">
         <StratumDepthBar :stratum="lockedStratum" :length="240" />
@@ -233,7 +277,7 @@ function exportList(): void {
           该单位包含物：{{ lockedStratum.inclusions.join('、') || '无' }} · 堆积成因：{{ lockedStratum.formation || '—' }}
         </span>
       </div>
-      <el-form label-width="100px" class="form">
+      <el-form label-width="100px" class="form" :disabled="pickTrenchSealed">
         <el-row :gutter="12">
           <el-col :span="8">
             <el-form-item label="器物编号" required>
@@ -292,14 +336,19 @@ function exportList(): void {
         </el-row>
       </el-form>
       <div class="actions">
-        <el-button type="primary" @click="submit">{{ editingId ? '保存修改' : '登记出土物' }}</el-button>
+        <el-button type="primary" :disabled="pickTrenchSealed" @click="submit">{{ editingId ? '保存修改' : '登记出土物' }}</el-button>
         <el-button v-if="editingId" @click="resetForm">取消编辑</el-button>
       </div>
     </el-card>
 
     <div class="toolbar">
-      <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 190px">
-        <el-option v-for="trench in trenchState.trenches" :key="trench.id" :label="`${trench.area} · ${trench.code}`" :value="trench.id" />
+      <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 210px">
+        <el-option
+          v-for="trench in trenchState.trenches"
+          :key="trench.id"
+          :label="`${trench.area} · ${trench.code}${isTrenchSealed(trench.id) ? '（已封存）' : ''}`"
+          :value="trench.id"
+        />
       </el-select>
       <el-select v-model="filterCategory" placeholder="全部类别" clearable style="width: 130px">
         <el-option v-for="item in ARTIFACT_CATEGORIES" :key="item" :label="item" :value="item" />
@@ -307,11 +356,12 @@ function exportList(): void {
       <el-tag type="info" effect="plain">命中 {{ visible.length }} 条 · 合计 {{ totalCount }} 件</el-tag>
     </div>
 
-    <el-table :data="visible" border stripe row-key="id">
+    <el-table :data="visible" border stripe row-key="id" :row-class-name="artifactRowClass">
       <el-table-column prop="code" label="器物编号" width="140" />
-      <el-table-column label="探方" width="150">
+      <el-table-column label="探方" width="170">
         <template #default="{ row }: { row: Artifact }">
           <span class="mono">{{ trenchOf(row.stratumId) }}</span>
+          <el-tag v-if="isArtifactSealed(row)" type="warning" size="small" effect="plain" class="mini">封存</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="地层单位" width="110">
@@ -338,10 +388,15 @@ function exportList(): void {
       <el-table-column prop="date" label="出土日期" width="120" />
       <el-table-column prop="collector" label="提取人" width="90" />
       <el-table-column prop="tempLocation" label="临时存放" min-width="140" show-overflow-tooltip />
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }: { row: Artifact }">
-          <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
+          <template v-if="isArtifactSealed(row)">
+            <el-tag type="info" size="small" effect="plain">封存只读</el-tag>
+          </template>
+          <template v-else>
+            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
@@ -368,5 +423,14 @@ function exportList(): void {
 }
 .actions {
   padding-left: 100px;
+}
+.head-seal {
+  margin-left: 8px;
+}
+.seal-alert {
+  margin: 10px 0;
+}
+.mini {
+  margin-left: 4px;
 }
 </style>

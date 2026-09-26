@@ -1,6 +1,7 @@
 import { createStore } from 'zustand/vanilla'
 import type { Stratum, UnitType } from '@/types'
 import { db, syncAll, syncDelete, syncPut } from '@/hooks/usePersistentStore'
+import { assertTrenchWritable } from '@/stores/sealGuard'
 
 export interface StratumState {
   strata: Stratum[]
@@ -20,15 +21,19 @@ export const stratumStore = createStore<StratumState>((set, get) => ({
     set({ strata, loaded: true })
   },
   save: async (stratum) => {
+    assertTrenchWritable(stratum.trenchId, '编目地层单位')
     await syncPut<Stratum>(db.strata, stratum)
     await get().hydrate()
   },
   remove: async (id) => {
+    const target = get().strata.find((item) => item.id === id)
+    if (target) assertTrenchWritable(target.trenchId, '删除地层单位')
     await syncDelete<Stratum>(db.strata, id)
     await get().hydrate()
   },
   bulkSetType: async (ids, type) => {
     const targets = get().strata.filter((item) => ids.includes(item.id))
+    targets.forEach((item) => assertTrenchWritable(item.trenchId, '批量调整单位类型'))
     await Promise.all(targets.map((item) => syncPut<Stratum>(db.strata, { ...item, type })))
     await get().hydrate()
   }
