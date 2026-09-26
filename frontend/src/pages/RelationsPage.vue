@@ -45,6 +45,20 @@ const activeNode = computed(() => graph.value.nodes.find((node) => node.id === a
 const directOut = computed(() => (activeId.value ? graph.value.adjacency.get(activeId.value) ?? [] : []))
 const directIn = computed(() => (activeId.value ? graph.value.reverse.get(activeId.value) ?? [] : []))
 
+/** 已交接封存的探方 id 集合 */
+const sealedTrenchIds = computed(() => new Set(trenchState.trenches.filter((item) => item.sealed).map((item) => item.id)))
+
+/** 某个地层单位所属探方是否已封存 */
+function unitSealed(stratumId: string): boolean {
+  const stratum = stratumState.strata.find((item) => item.id === stratumId)
+  return stratum ? sealedTrenchIds.value.has(stratum.trenchId) : false
+}
+
+/** 关系任一端单位所属探方已封存即只读 */
+function relationSealed(relation: Relation): boolean {
+  return unitSealed(relation.unitAId) || unitSealed(relation.unitBId)
+}
+
 watch(
   () => [graphStrata.value.length, form.unitAId, form.unitBId] as const,
   () => {
@@ -78,6 +92,10 @@ async function submit(): Promise<void> {
   }
   if (form.unitAId === form.unitBId) {
     ElMessage.error('单位 A 与单位 B 不能相同')
+    return
+  }
+  if (unitSealed(form.unitAId) || unitSealed(form.unitBId)) {
+    ElMessage.error('所选单位所属探方已交接封存，层位关系只读；如需调整请先在「探方清单」解除封存')
     return
   }
   const others = relationState.relations.filter((item) => item.id !== editingId.value)
@@ -114,6 +132,10 @@ function edit(relation: Relation): void {
 }
 
 async function remove(relation: Relation): Promise<void> {
+  if (relationSealed(relation)) {
+    ElMessage.error('关系涉及已封存探方的单位，只读无法删除')
+    return
+  }
   await ElMessageBox.confirm(
     `确认删除关系「${unitLabel(relation.unitAId)} ${relation.type} ${unitLabel(relation.unitBId)}」？`,
     '删除确认',
@@ -237,9 +259,14 @@ function selectNode(nodeId: string): void {
               <el-tag size="small" effect="dark" class="type">{{ relation.type }}</el-tag>
               <span class="mono">{{ unitLabel(relation.unitBId) }}</span>
               <span class="muted">（{{ relation.basis }} · {{ relation.recorder || '未填记录人' }}）</span>
+              <el-tag v-if="relationSealed(relation)" type="danger" size="small" effect="plain">封存</el-tag>
               <span class="ops">
-                <el-button link type="primary" size="small" @click="edit(relation)">编辑</el-button>
-                <el-button link type="danger" size="small" @click="remove(relation)">删除</el-button>
+                <el-button link type="primary" size="small" :disabled="relationSealed(relation)" @click="edit(relation)">
+                  编辑
+                </el-button>
+                <el-button link type="danger" size="small" :disabled="relationSealed(relation)" @click="remove(relation)">
+                  删除
+                </el-button>
               </span>
             </li>
             <li v-if="relationState.relations.length === 0" class="muted">暂无层位关系</li>

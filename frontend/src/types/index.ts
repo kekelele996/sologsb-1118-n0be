@@ -1,5 +1,7 @@
-export { TRENCH_SIZES, trenchKey, findTrenchConflict } from './trench'
+export { TRENCH_SIZES, trenchKey, findTrenchConflict, isTrenchSealed } from './trench'
 export type { Trench, TrenchSize } from './trench'
+export { diffSealRecords } from './seal'
+export type { SealRecord, SealUnitSummary, SealDiff } from './seal'
 export { UNIT_TYPES, INCLUSIONS, stratumThickness, isDepthInverted, isCodeDuplicated } from './stratum'
 export type { Stratum, UnitType, Inclusion } from './stratum'
 export { ARTIFACT_CATEGORIES, COMPLETENESS } from './artifact'

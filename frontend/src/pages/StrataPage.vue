@@ -57,6 +57,13 @@ const visible = computed(() =>
   })
 )
 
+/** 已交接封存的探方 id 集合（封存探方下的单位只读） */
+const sealedTrenchIds = computed(() => new Set(trenchState.trenches.filter((item) => item.sealed).map((item) => item.id)))
+
+function trenchSealed(trenchId: string): boolean {
+  return sealedTrenchIds.value.has(trenchId)
+}
+
 function trenchLabel(trenchId: string): string {
   const trench = trenchState.trenches.find((item) => item.id === trenchId)
   return trench ? `${trench.area} · ${trench.code}` : '未知探方'
@@ -135,6 +142,10 @@ async function submit(): Promise<void> {
     ElMessage.warning('请选择所属探方')
     return
   }
+  if (trenchSealed(form.trenchId)) {
+    ElMessage.error('该探方已交接封存，编目记录只读；如需补登请先在「探方清单」解除封存')
+    return
+  }
   if (!form.code.trim()) {
     ElMessage.warning('请填写单位号（如 H12、L03）')
     return
@@ -172,6 +183,10 @@ async function submit(): Promise<void> {
 }
 
 async function remove(stratum: Stratum): Promise<void> {
+  if (trenchSealed(stratum.trenchId)) {
+    ElMessage.error('探方已交接封存，地层单位只读，无法删除')
+    return
+  }
   const count = artifactState.artifacts.filter((item) => item.stratumId === stratum.id).length
   const relations = relationState.relations.filter(
     (item) => item.unitAId === stratum.id || item.unitBId === stratum.id
@@ -190,8 +205,21 @@ async function applyBatchType(): Promise<void> {
     ElMessage.warning('请先勾选要调整的单位')
     return
   }
-  await stratumStore.getState().bulkSetType(selectedIds.value, batchType.value)
-  ElMessage.success(`已把 ${selectedIds.value.length} 个单位的类型调整为「${batchType.value}」`)
+  const editable = selectedIds.value.filter((id) => {
+    const stratum = stratumState.strata.find((item) => item.id === id)
+    return stratum !== undefined && !trenchSealed(stratum.trenchId)
+  })
+  const skipped = selectedIds.value.length - editable.length
+  if (editable.length === 0) {
+    ElMessage.error('勾选的单位均属于已封存探方，无法批量调整')
+    return
+  }
+  await stratumStore.getState().bulkSetType(editable, batchType.value)
+  ElMessage.success(
+    skipped > 0
+      ? `已把 ${editable.length} 个单位的类型调整为「${batchType.value}」，${skipped} 个已封存单位被跳过`
+      : `已把 ${editable.length} 个单位的类型调整为「${batchType.value}」`
+  )
 }
 </script>
 
@@ -235,6 +263,14 @@ async function applyBatchType(): Promise<void> {
       show-icon
       title="层序与单位号校验通过"
     />
+    <el-alert
+      v-if="filterTrenchId && trenchSealed(filterTrenchId)"
+      class="alert"
+      type="info"
+      :closable="false"
+      show-icon
+      title="该探方已交接封存，地层单位只读；如需补登请先在「探方清单」解除封存"
+    />
 
     <div class="toolbar">
       <el-select v-model="filterTrenchId" placeholder="全部探方" clearable style="width: 190px">
@@ -268,9 +304,10 @@ async function applyBatchType(): Promise<void> {
       <el-table-column label="序号" width="70">
         <template #default="{ row }: { row: Stratum }">{{ order.indexOf.get(row.id) ?? '—' }}</template>
       </el-table-column>
-      <el-table-column label="探方" width="150">
+      <el-table-column label="探方" width="170">
         <template #default="{ row }: { row: Stratum }">
           <span class="mono">{{ trenchLabel(row.trenchId) }}</span>
+          <el-tag v-if="trenchSealed(row.trenchId)" type="danger" size="small" effect="plain" class="mini">封存</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="单位号" width="110">
@@ -309,8 +346,12 @@ async function applyBatchType(): Promise<void> {
       </el-table-column>
       <el-table-column label="操作" width="130" fixed="right">
         <template #default="{ row }: { row: Stratum }">
-          <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
+          <el-button link type="primary" size="small" :disabled="trenchSealed(row.trenchId)" @click="openEdit(row)">
+            编辑
+          </el-button>
+          <el-button link type="danger" size="small" :disabled="trenchSealed(row.trenchId)" @click="remove(row)">
+            删除
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -321,7 +362,13 @@ async function applyBatchType(): Promise<void> {
           <el-col :span="12">
             <el-form-item label="所属探方" required>
               <el-select v-model="form.trenchId" style="width: 100%">
-                <el-option v-for="trench in trenchState.trenches" :key="trench.id" :label="`${trench.area} · ${trench.code}`" :value="trench.id" />
+                <el-option
+                  v-for="trench in trenchState.trenches"
+                  :key="trench.id"
+                  :label="`${trench.area} · ${trench.code}${trench.sealed ? '（已封存）' : ''}`"
+                  :value="trench.id"
+                  :disabled="trench.sealed"
+                />
               </el-select>
             </el-form-item>
           </el-col>

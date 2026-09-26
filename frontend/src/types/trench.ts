@@ -22,6 +22,8 @@ export interface Trench {
   wallNote: string
   /** 是否已回填 */
   backfilled: boolean
+  /** 是否已交接封存（封存后该探方下的编目记录只读） */
+  sealed: boolean
 }
 
 /** 探方唯一键：发掘区-探方号 */
@@ -33,4 +35,9 @@ export function trenchKey(trench: Pick<Trench, 'area' | 'code'>): string {
 export function findTrenchConflict(trenches: Trench[], candidate: Pick<Trench, 'id' | 'area' | 'code'>): Trench | null {
   const key = trenchKey(candidate)
   return trenches.find((item) => item.id !== candidate.id && trenchKey(item) === key) ?? null
+}
+
+/** 探方是否已交接封存 */
+export function isTrenchSealed(trenches: Trench[], trenchId: string): boolean {
+  return trenches.find((item) => item.id === trenchId)?.sealed ?? false
 }

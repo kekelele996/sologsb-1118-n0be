@@ -57,8 +57,8 @@ sologsb-1118/
 │   ├── nginx.conf              # try_files 前端路由回落 + gzip
 │   ├── public/favicon.svg
 │   └── src/
-│       ├── types/              # trench.ts / stratum.ts / artifact.ts / relation.ts / index.ts
-│       ├── stores/             # trenchStore / stratumStore / artifactStore / relationStore（Zustand）
+│       ├── types/              # trench.ts / stratum.ts / artifact.ts / relation.ts / seal.ts / index.ts
+│       ├── stores/             # trenchStore / stratumStore / artifactStore / relationStore / sealStore（Zustand）
 │       ├── components/common/  # StratumDepthBar / RelationGraph / TrenchTag / UnitPicker
 │       ├── hooks/              # useStratumOrder / useRelationGraph / usePersistentStore
 │       ├── pages/              # TrenchesPage / StrataPage / ArtifactsPage / RelationsPage / SectionsPage
@@ -70,23 +70,25 @@ sologsb-1118/
 
 | 模型 | 说明 | Dexie 表 |
 | --- | --- | --- |
-| Trench 探方 | 探方号、发掘区、规格、基点坐标、开口层位、发掘起止、负责人、四壁备注、是否回填 | `trenches` |
+| Trench 探方 | 探方号、发掘区、规格、基点坐标、开口层位、发掘起止、负责人、四壁备注、是否回填、是否交接封存 | `trenches` |
 | Stratum 地层单位 | 单位号、类型（地层/灰坑/房址/沟/墓葬）、开口层位、上下界深度、土质土色、包含物、堆积成因、绘图拍照号 | `strata` |
 | Artifact 出土物 | 所属地层单位、器物编号、类别、件数、残整程度、探方内 X/Y/Z、出土日期、提取人、临时存放 | `artifacts` |
 | Relation 层位关系 | 单位 A、关系类型（叠压/打破/共存）、单位 B、判定依据、记录人、备注 | `relations` |
+| SealRecord 封存清单 | 探方交接封存版本：版本号、封存时间、操作人、单位数/出土物件数/关系数、各单位件数明细、解除时间与解除原因 | `seals` |
 
 - 数据库名 `gbtrenchlog`，`meta` 表保存 `schemaVersion`；
 - `version(2)` 升级迁移会为历史地层单位补齐「开口层位」字段并规范包含物数组；
+- `version(3)` 升级迁移会为历史探方补齐「交接封存」状态并新增封存清单表；
 - 数据仅存于浏览器本地，容器无状态、不挂载命名卷。
 
 ## 六、主要页面
 
 | 路由 | 功能 |
 | --- | --- |
-| `/trenches` | 探方清单：按「发掘区-探方号」校验唯一性，卡片显示单位数、出土物件数、关系数与发掘进度状态 |
-| `/strata` | 地层单位编目表：按类型与深度区间筛选，层序倒置与单位号重复即时高亮，深度刻度条展示厚度 |
-| `/artifacts` | 出土物登记与清单：先锁定所属地层单位（级联选择器），带出深度区间并校验出土深度是否在该区间内 |
-| `/relations` | 层位关系视图：SVG 有向图展示叠压/打破，点击节点高亮直接关系，新增关系前做环路检测 |
+| `/trenches` | 探方清单：按「发掘区-探方号」校验唯一性，卡片显示单位数、出土物件数、关系数与发掘进度状态；负责人可交接封存（生成清单版本）、填原因解除、查看各版清单并与上一版对照 |
+| `/strata` | 地层单位编目表：按类型与深度区间筛选，层序倒置与单位号重复即时高亮，深度刻度条展示厚度；已封存探方的单位只读 |
+| `/artifacts` | 出土物登记与清单：先锁定所属地层单位（级联选择器），带出深度区间并校验出土深度是否在该区间内；已封存探方下单位只读 |
+| `/relations` | 层位关系视图：SVG 有向图展示叠压/打破，点击节点高亮直接关系，新增关系前做环路检测；涉及已封存探方单位的关系只读 |
 | `/sections` | 四壁剖面示意：按深度刻度绘制地层条带与厚度标注，叠加出土物投影点 |
 
 ## 七、校验规则
@@ -97,3 +99,11 @@ sologsb-1118/
 - 若「A 叠压/打破 B」但 A 的上界深度大于 B，则提示层位关系与深度矛盾；
 - 新增层位关系前做**环路检测**（DFS），会形成闭合矛盾的关系直接拒绝保存；
 - 出土物的 Z（深度）必须落在其所属地层单位的深度区间内，否则给出层位核对提示。
+
+## 八、交接封存
+
+- 换班交接时，负责人在「探方清单」对探方执行**交接封存**：生成一版封存清单，记录封存时间、操作人、地层单位数、出土物总件数、层位关系数及每个单位的器物件数明细；
+- 封存后该探方下的地层单位、出土物、层位关系全部**只读**（新增、编辑、删除、批量调整均被拒绝），未封存的探方照常编目；
+- 发现漏登时须**填写解除原因**才能解除封存，原因与解除时间记入当前清单版本；
+- 补登修改后重新封存会生成**新的清单版本**，在「封存清单」对话框中可查看各版本明细，并与上一版对照（单位增减、件数变化、总数差异）；
+- 封存中的探方不可删除，须先解除封存。

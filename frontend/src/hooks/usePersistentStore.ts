@@ -1,22 +1,23 @@
 import { onUnmounted, reactive } from 'vue'
 import type { StoreApi } from 'zustand/vanilla'
 import Dexie, { type Table } from 'dexie'
-import type { Artifact, Relation, Stratum, Trench } from '@/types'
+import type { Artifact, Relation, SealRecord, Stratum, Trench } from '@/types'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
   value: number
 }
 
-/** Dexie 封装：探方 / 地层单位 / 出土物 / 层位关系 四张表 + 元数据表 */
+/** Dexie 封装：探方 / 地层单位 / 出土物 / 层位关系 / 封存清单 五张表 + 元数据表 */
 class TrenchLogDb extends Dexie {
   trenches!: Table<Trench, string>
   strata!: Table<Stratum, string>
   artifacts!: Table<Artifact, string>
   relations!: Table<Relation, string>
+  seals!: Table<SealRecord, string>
   meta!: Table<MetaRow, string>
 
   constructor() {
@@ -47,6 +48,26 @@ class TrenchLogDb extends Dexie {
             }
             if (!Array.isArray(stratum.inclusions)) {
               stratum.inclusions = []
+            }
+          })
+      })
+    // v3：探方新增「交接封存」状态，新增封存清单表（每次封存一个版本）
+    this.version(SCHEMA_VERSION)
+      .stores({
+        trenches: 'id, code, area, backfilled, sealed',
+        strata: 'id, trenchId, code, type, topDepth',
+        artifacts: 'id, stratumId, code, category, date',
+        relations: 'id, unitAId, unitBId, type, basis',
+        seals: 'id, trenchId, version',
+        meta: 'key'
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<Trench, string>('trenches')
+          .toCollection()
+          .modify((trench) => {
+            if (typeof trench.sealed !== 'boolean') {
+              trench.sealed = false
             }
           })
       })
@@ -104,7 +125,8 @@ export async function seedDemoData(): Promise<void> {
       endDate: '',
       leader: '方铭',
       wallNote: '北壁、东壁保存较好；南壁被现代扰坑破坏',
-      backfilled: false
+      backfilled: false,
+      sealed: false
     },
     {
       id: 'tr_0502',
@@ -117,7 +139,8 @@ export async function seedDemoData(): Promise<void> {
       endDate: today,
       leader: '方铭',
       wallNote: '四壁规整，西壁可见 H12 剖面',
-      backfilled: true
+      backfilled: true,
+      sealed: false
     }
   ])
 

@@ -9,6 +9,7 @@ export interface TrenchState {
   save: (trench: Trench) => Promise<void>
   remove: (id: string) => Promise<void>
   setBackfilled: (id: string, backfilled: boolean) => Promise<void>
+  setSealed: (id: string, sealed: boolean) => Promise<void>
 }
 
 export const trenchStore = createStore<TrenchState>((set, get) => ({
@@ -31,6 +32,12 @@ export const trenchStore = createStore<TrenchState>((set, get) => ({
     const target = get().trenches.find((item) => item.id === id)
     if (!target) return
     await syncPut<Trench>(db.trenches, { ...target, backfilled })
+    await get().hydrate()
+  },
+  setSealed: async (id, sealed) => {
+    const target = get().trenches.find((item) => item.id === id)
+    if (!target) return
+    await syncPut<Trench>(db.trenches, { ...target, sealed })
     await get().hydrate()
   }
 }))
